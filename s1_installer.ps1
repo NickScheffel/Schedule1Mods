@@ -62,10 +62,16 @@ function Install-Mods {
         if ($LASTEXITCODE -ne 0) {
             throw "Git clone failed with exit code $LASTEXITCODE"
         }
+        
+        # Check if the repo has a "mods" subfolder
+        $repoModsFolder = Join-Path $tempDir "mods"
+        $sourceFolder = if (Test-Path $repoModsFolder) { $repoModsFolder } else { $tempDir }
+        
         # Remove all existing files and subfolders in the Mods folder
-        Remove-Item -Path "$modsFolder\*" -Recurse -Force
-        # Copy all files and folders (excluding .git) from the temp directory directly into Mods
-        Copy-Item -Path "$tempDir\*" -Destination $modsFolder -Recurse -Force -Exclude ".git"
+        Remove-Item -Path "$modsFolder\*" -Recurse -Force -ErrorAction SilentlyContinue
+        
+        # Copy all files from the correct source folder directly into Mods
+        Copy-Item -Path "$sourceFolder\*" -Destination $modsFolder -Recurse -Force -Exclude ".git"
         Write-Host "Success: Repository files synchronized into $modsFolder"
     } catch {
         Write-Host "Error: Failed to clone and synchronize repository. $_"
