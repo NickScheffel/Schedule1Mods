@@ -1,6 +1,9 @@
 # Configuration Variables
-# Replace with the actual Steam App ID for "Schedule I"
-$appId = "3164500"  # TODO: Update this with the correct App ID
+# Script version for update checking
+$scriptVersion = "1.0.0"
+
+# Steam App ID for "Schedule I"
+$appId = "3164500"
 
 # GitHub repository URL for the mods
 $gitRepoUrl = "https://github.com/NickScheffel/Schedule1Mods.git"
@@ -8,6 +11,10 @@ $gitRepoUrl = "https://github.com/NickScheffel/Schedule1Mods.git"
 # MelonLoader installer download URL
 $melonLoaderUrl = "https://github.com/LavaGang/MelonLoader.Installer/releases/latest/download/MelonLoader.Installer.exe"
 $melonInstallerPath = "$env:TEMP\MelonLoader.Installer.exe"
+
+# Script paths
+$scriptPath = $MyInvocation.MyCommand.Path
+$scriptName = Split-Path $scriptPath -Leaf
 
 # Game executable name (adjust if different)
 $gameExeName = "Schedule I.exe"
@@ -51,33 +58,197 @@ function Get-GameInstallPath {
 }
 
 # Function to Install Mods Directly into Mods Folder
-# Function to Install Mods Directly into Mods Folder
 function Install-Mods {
     param ([string]$modsFolder, [string]$gitRepoUrl)
     Write-Host "Info: Synchronizing repository files directly into $modsFolder..."
     $tempDir = New-Item -ItemType Directory -Path ([System.IO.Path]::GetTempPath()) -Name ("git_clone_" + [guid]::NewGuid())
     try {
         # Clone the repository into the temporary directory
-        git clone $gitRepoUrl $tempDir 2>&1 | Out-Null
+        $cloneOutput = git clone $gitRepoUrl $tempDir 2>&1
         if ($LASTEXITCODE -ne 0) {
-            throw "Git clone failed with exit code $LASTEXITCODE"
+            throw "Git clone failed with exit code $LASTEXITCODE. Details: $cloneOutput"
         }
         
         # Check if the repo has a "mods" subfolder
         $repoModsFolder = Join-Path $tempDir "mods"
         $sourceFolder = if (Test-Path $repoModsFolder) { $repoModsFolder } else { $tempDir }
         
-        # Remove all existing files and subfolders in the Mods folder
-        Remove-Item -Path "$modsFolder\*" -Recurse -Force -ErrorAction SilentlyContinue
+        # Create a backup of user's custom mods
+        $customModsDir = New-Item -ItemType Directory -Path ([System.IO.Path]::GetTempPath()) -Name ("custom_mods_" + [guid]::NewGuid())
+        $repoModsList = @()
         
-        # Copy all files from the correct source folder directly into Mods
+        # Get list of files from the repository
+        Get-ChildItem -Path $sourceFolder -Recurse -File | ForEach-Object {
+            $relativePath = $_.FullName.Substring($sourceFolder.Length + 1)
+            $repoModsList += $relativePath
+        }
+        
+        # Back up custom mods (files not present in repo)
+        Get-ChildItem -Path $modsFolder -Recurse -File | ForEach-Object {
+            $relativePath = $_.FullName.Substring($modsFolder.Length + 1)
+            if ($repoModsList -notcontains $relativePath) {
+                # This is a custom mod - back it up
+                $destPath = Join-Path $customModsDir $relativePath
+                $destDir = Split-Path -Parent $destPath
+                if (-not (Test-Path $destDir)) {
+                    New-Item -ItemType Directory -Path $destDir -Force | Out-Null
+                }
+                Copy-Item -Path $_.FullName -Destination $destPath -Force
+                Write-Host "Info: Preserved custom mod: $relativePath"
+            }
+        }
+        
+        # Remove all repo-managed files in the Mods folder
+        Write-Host "Info: Removing repository-managed mods..."
+        foreach ($mod in $repoModsList) {
+            $modPath = Join-Path $modsFolder $mod
+            if (Test-Path $modPath) {
+                Remove-Item -Path $modPath -Force
+            }
+        }
+        
+        # Copy all files from the correct source folder into Mods
         Copy-Item -Path "$sourceFolder\*" -Destination $modsFolder -Recurse -Force -Exclude ".git"
         Write-Host "Success: Repository files synchronized into $modsFolder"
+        
+        # Restore custom mods
+        if (Test-Path $customModsDir) {
+            Get-ChildItem -Path $customModsDir -Recurse -File | ForEach-Object {
+                $relativePath = $_.FullName.Substring($customModsDir.Length + 1)
+                $destPath = Join-Path $modsFolder $relativePath
+                $destDir = Split-Path -Parent $destPath
+                if (-not (Test-Path $destDir)) {
+                    New-Item -ItemType Directory -Path $destDir -Force | Out-Null
+                }
+                Copy-Item -Path $_.FullName -Destination $destPath -Force
+            }
+            Write-Host "Success: Restored custom mods"
+        }
     } catch {
-        Write-Host "Error: Failed to clone and synchronize repository. $_"
+        Write-Host "Error: Failed to clone and synchronize repository. $_" -ForegroundColor Red
         Write-Host "Note: Ensure Git is installed and you have internet access."
+        return $false
     } finally {
-        # Clean up the temporary directory
+        # Clean up temporary directories
+        Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -Path $customModsDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    return $true
+}
+
+# Function to Create Desktop Shortcut
+function Create-Shortcut {
+    param ([string]$targetPath)
+    
+    try {
+        $desktopPath = [Environment]::GetFolderPath("Desktop")
+        $shortcutPath = Join-Path $desktopPath "Schedule I Mod Installer.lnk"
+        
+        # Check if shortcut already exists
+        if (Test-Path $shortcutPath) {
+            Write-Host "Shortcut already exists at: $shortcutPath"
+            return
+        }
+        
+        $WshShell = New-Object -ComObject WScript.Shell
+        $Shortcut = $WshShell.CreateShortcut($shortcutPath)
+        $Shortcut.TargetPath = "powershell.exe"
+        $Shortcut.Arguments = "-ExecutionPolicy Bypass -File `"$targetPath`""
+        $Shortcut.WorkingDirectory = Split-Path $targetPath -Parent
+        $Shortcut.IconLocation = "powershell.exe,0"
+        $Shortcut.Description = "Run Schedule I Mod Installer"
+        $Shortcut.Save()
+        
+        Write-Host "Shortcut created at: $shortcutPath" -ForegroundColor Green
+    } catch {
+        Write-Host "Error creating shortcut: $_" -ForegroundColor Red
+    }
+}
+
+# Function to Check for Script Updates and Self-Update
+function Update-Script {
+    param ([string]$scriptPath, [string]$repoUrl, [string]$currentVersion)
+    
+    Write-Host "Checking for script updates from $repoUrl..."
+    
+    # Create temp directory for repo clone
+    $tempDir = New-Item -ItemType Directory -Path ([System.IO.Path]::GetTempPath()) -Name ("update_check_" + [guid]::NewGuid())
+    
+    try {
+        # Verify Git is available
+        if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+            Write-Host "Error: Git not found in PATH, cannot check for updates" -ForegroundColor Red
+            return $false
+        }
+        
+        # Clone the repository into the temporary directory (depth 1 for speed)
+        Write-Host "Cloning repository for update check..." -ForegroundColor Cyan
+        $cloneOutput = git clone --depth 1 $repoUrl $tempDir 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "Warning: Unable to check for updates. Git clone failed with code $LASTEXITCODE" -ForegroundColor Yellow
+            Write-Host "Clone output: $cloneOutput" -ForegroundColor Yellow
+            return $false
+        }
+        
+        # Get script name from path
+        $scriptName = Split-Path $scriptPath -Leaf
+        $repoScriptPath = Join-Path $tempDir $scriptName
+        
+        # Check if the script exists in the repo
+        if (-not (Test-Path $repoScriptPath)) {
+            Write-Host "Warning: Script file '$scriptName' not found in repository" -ForegroundColor Yellow
+            
+            # List files in repo root to help diagnose
+            Write-Host "Files found in repository:" -ForegroundColor Yellow
+            Get-ChildItem -Path $tempDir -File | ForEach-Object { Write-Host "  - $($_.Name)" }
+            return $false
+        }
+        
+        # Compare file hash instead of relying on version patterns
+        # This is more reliable for detecting changes
+        $localHash = (Get-FileHash -Path $scriptPath -Algorithm SHA256).Hash
+        $repoHash = (Get-FileHash -Path $repoScriptPath -Algorithm SHA256).Hash
+        
+        if ($localHash -ne $repoHash) {
+            Write-Host "New version found (files differ)" -ForegroundColor Cyan
+            
+            # Attempt to extract version from repo script
+            $repoScriptContent = Get-Content $repoScriptPath -Raw
+            $versionPattern = '\$scriptVersion\s*=\s*"([\d\.]+)"'  
+            $versionMatch = [regex]::Match($repoScriptContent, $versionPattern)
+            
+            $repoVersion = "unknown"
+            if ($versionMatch.Success) {
+                $repoVersion = $versionMatch.Groups[1].Value
+                Write-Host "Repository version: $repoVersion (current: $currentVersion)" -ForegroundColor Cyan
+            } else {
+                Write-Host "Repository version number not found, but content differs" -ForegroundColor Yellow
+            }
+            
+            # Backup current script
+            $backupPath = "$scriptPath.backup"
+            Copy-Item -Path $scriptPath -Destination $backupPath -Force
+            Write-Host "Backed up current script to: $backupPath"
+            
+            # Replace current script with new version
+            Copy-Item -Path $repoScriptPath -Destination $scriptPath -Force
+            Write-Host "Updated script (from repo version $repoVersion)" -ForegroundColor Green
+            
+            # Restart the script with the new version
+            Write-Host "Restarting script with new version..."
+            Start-Process powershell.exe -ArgumentList "-ExecutionPolicy Bypass -File `"$scriptPath`"" -NoNewWindow
+            exit
+        } else {
+            Write-Host "Script is up to date (version $currentVersion)" -ForegroundColor Green
+            return $true
+        }
+        
+        # Handled in the file hash comparison section above
+    } catch {
+        Write-Host "Error checking for updates: $_" -ForegroundColor Red
+        return $false
+    } finally {
+        # Clean up temporary directory
         Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
@@ -85,13 +256,15 @@ function Install-Mods {
 # Function to Ensure Git is Installed
 function Ensure-GitInstalled {
     if (Get-Command git -ErrorAction SilentlyContinue) {
-        Write-Host "Git is already installed."
+        $gitVersion = (git --version) 2>&1
+        Write-Host "Git is already installed: $gitVersion"
         return
     }
     Write-Host "Git is not installed. Proceeding to install Git."
     
     try {
         # Fetch the latest Git for Windows release info from GitHub API
+        Write-Host "Fetching latest Git for Windows release information..."
         $releaseInfo = Invoke-RestMethod -Uri "https://api.github.com/repos/git-for-windows/git/releases/latest"
         $asset = $releaseInfo.assets | Where-Object { $_.name -like "*-64-bit.exe" } | Select-Object -First 1
         if (-not $asset) {
@@ -101,6 +274,7 @@ function Ensure-GitInstalled {
         $installerPath = "$env:TEMP\Git-Installer.exe"
         
         # Download the Git installer
+        Write-Host "Downloading Git installer from $installerUrl..."
         Invoke-WebRequest -Uri $installerUrl -OutFile $installerPath -UseBasicParsing
         if (-not (Test-Path $installerPath)) {
             throw "Failed to download Git installer."
@@ -116,7 +290,29 @@ function Ensure-GitInstalled {
             $env:PATH += ";$gitCmdPath"
             Write-Host "Git installed and added to PATH."
         } else {
-            throw "Git installation directory not found."
+            Write-Host "Warning: Expected Git path not found at $gitCmdPath" -ForegroundColor Yellow
+            # Try to find Git elsewhere
+            $possibleGitPaths = @(
+                "C:\Program Files (x86)\Git\cmd",
+                "$env:ProgramFiles\Git\cmd",
+                "$env:ProgramFiles\Git\bin",
+                "$env:ProgramFiles(x86)\Git\cmd",
+                "$env:ProgramFiles(x86)\Git\bin"
+            )
+            
+            $gitFound = $false
+            foreach ($path in $possibleGitPaths) {
+                if (Test-Path $path) {
+                    $env:PATH += ";$path"
+                    Write-Host "Found Git at $path and added to PATH."
+                    $gitFound = $true
+                    break
+                }
+            }
+            
+            if (-not $gitFound) {
+                throw "Git installation directory not found."
+            }
         }
         
         # Verify Git is now available
@@ -133,8 +329,14 @@ function Ensure-GitInstalled {
 }
 
 # Main Script Logic
+Write-Host "========== Schedule I Mod Installer v$scriptVersion =========="
+
+# First check for script updates
 Write-Host "Ensuring Git is installed before proceeding..."
 Ensure-GitInstalled
+
+# Check for script updates
+Update-Script -scriptPath $scriptPath -repoUrl $gitRepoUrl -currentVersion $scriptVersion
 
 # Step 1: Locate Steam Installation
 $steamPath = Get-ItemProperty -Path "HKLM:\SOFTWARE\WOW6432Node\Valve\Steam" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty InstallPath
@@ -155,7 +357,12 @@ if ($scheduleFolder) {
 
     # Step 4: Check for Mods Folder and Install Mods
     if (Test-Path $modsFolder) {
-        Install-Mods -modsFolder $modsFolder -gitRepoUrl $gitRepoUrl
+        $installSuccess = Install-Mods -modsFolder $modsFolder -gitRepoUrl $gitRepoUrl
+        if ($installSuccess) {
+            Write-Host "Mod installation completed successfully!" -ForegroundColor Green
+        } else {
+            Write-Host "Mod installation completed with errors." -ForegroundColor Yellow
+        }
     } else {
         Write-Host "Info: 'Mods' folder not found. Downloading MelonLoader installer..."
         try {
@@ -168,7 +375,12 @@ if ($scheduleFolder) {
 
                 # Check if Mods folder was created
                 if (Test-Path $modsFolder) {
-                    Install-Mods -modsFolder $modsFolder -gitRepoUrl $gitRepoUrl
+                    $installSuccess = Install-Mods -modsFolder $modsFolder -gitRepoUrl $gitRepoUrl
+        if ($installSuccess) {
+            Write-Host "Mod installation completed successfully!" -ForegroundColor Green
+        } else {
+            Write-Host "Mod installation completed with errors." -ForegroundColor Yellow
+        }
                 } else {
                     Write-Host "Error: 'Mods' folder not found after installation."
                     Write-Host "Please ensure you selected the correct executable in MelonLoader."
@@ -182,6 +394,19 @@ if ($scheduleFolder) {
         }
     }
 } else {
-    Write-Host "Error: Schedule I is not installed or could not be found."
+    Write-Host "Error: Schedule I is not installed or could not be found." -ForegroundColor Red
     Write-Host "Please verify the App ID ($appId) and ensure the game is installed via Steam."
 }
+
+# Create desktop shortcut
+Create-Shortcut -targetPath $scriptPath
+
+# Show execution summary
+Write-Host "\n========== Summary ==========" -ForegroundColor Cyan
+Write-Host "Script version: $scriptVersion" -ForegroundColor Cyan
+Write-Host "Execution completed at: $(Get-Date)" -ForegroundColor Cyan
+Write-Host "============================" -ForegroundColor Cyan
+
+# Keep console window open to see results
+Write-Host "Press any key to exit..." -ForegroundColor Yellow
+$null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
