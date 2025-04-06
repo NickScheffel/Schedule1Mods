@@ -1,6 +1,6 @@
 # Configuration Variables
 # Script version for update checking
-$scriptVersion = "1.2.0"
+$scriptVersion = "1.2.1"
 
 # Steam App ID for "Schedule I"
 $appId = "3164500"
@@ -425,16 +425,34 @@ if ($scheduleFolder) {
         Write-Host "Schedule I installation not found automatically." -ForegroundColor Yellow
         Write-Host "Would you like to manually select the installation folder? (Y/N)" -ForegroundColor Cyan
         $response = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
-    
-    if ($response.Character -eq 'Y' -or $response.Character -eq 'y') {
-        Write-Host "Opening folder selection dialog..." -ForegroundColor Cyan
-        $scheduleFolder = Show-FolderSelectionDialog
         
-        if ($scheduleFolder -and (Test-Path $scheduleFolder)) {
-            Write-Host "Success: Using manually selected path: $scheduleFolder" -ForegroundColor Green
+        if ($response.Character -eq 'Y' -or $response.Character -eq 'y') {
+            Write-Host "Opening folder selection dialog..." -ForegroundColor Cyan
+            $scheduleFolder = Show-FolderSelectionDialog
+            
+            if ($scheduleFolder -and (Test-Path $scheduleFolder)) {
+                Write-Host "Success: Using manually selected path: $scheduleFolder" -ForegroundColor Green
+            } else {
+                Write-Host "Error: No valid folder selected." -ForegroundColor Red
+                Write-Host "Installation cannot continue."
+                
+                # Create desktop shortcut anyway
+                Create-Shortcut -targetPath $scriptPath
+                
+                # Show execution summary
+                Write-Host "\n========== Summary ==========" -ForegroundColor Cyan
+                Write-Host "Script version: $scriptVersion" -ForegroundColor Cyan
+                Write-Host "Status: Failed - Game path not found or selected" -ForegroundColor Red
+                Write-Host "Execution completed at: $(Get-Date)" -ForegroundColor Cyan
+                Write-Host "============================" -ForegroundColor Cyan
+                
+                # Exit early
+                Write-Host "Press any key to exit..." -ForegroundColor Yellow
+                $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+                exit
+            }
         } else {
-            Write-Host "Error: No valid folder selected." -ForegroundColor Red
-            Write-Host "Installation cannot continue."
+            Write-Host "Installation canceled by user." -ForegroundColor Yellow
             
             # Create desktop shortcut anyway
             Create-Shortcut -targetPath $scriptPath
@@ -442,7 +460,7 @@ if ($scheduleFolder) {
             # Show execution summary
             Write-Host "\n========== Summary ==========" -ForegroundColor Cyan
             Write-Host "Script version: $scriptVersion" -ForegroundColor Cyan
-            Write-Host "Status: Failed - Game path not found or selected" -ForegroundColor Red
+            Write-Host "Status: Canceled by user" -ForegroundColor Yellow
             Write-Host "Execution completed at: $(Get-Date)" -ForegroundColor Cyan
             Write-Host "============================" -ForegroundColor Cyan
             
@@ -452,26 +470,8 @@ if ($scheduleFolder) {
             exit
         }
     } else {
-        Write-Host "Installation canceled by user." -ForegroundColor Yellow
-        
-        # Create desktop shortcut anyway
-        Create-Shortcut -targetPath $scriptPath
-        
-        # Show execution summary
-        Write-Host "\n========== Summary ==========" -ForegroundColor Cyan
-        Write-Host "Script version: $scriptVersion" -ForegroundColor Cyan
-        Write-Host "Status: Canceled by user" -ForegroundColor Yellow
-        Write-Host "Execution completed at: $(Get-Date)" -ForegroundColor Cyan
-        Write-Host "============================" -ForegroundColor Cyan
-        
-        # Exit early
-        Write-Host "Press any key to exit..." -ForegroundColor Yellow
-        $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
-        exit
+        Write-Host "Success: Schedule I is installed at: $scheduleFolder" -ForegroundColor Green
     }
-    }
-} else {
-    Write-Host "Success: Schedule I is installed at: $scheduleFolder" -ForegroundColor Green
 }
 
 # Step 3: Define Mods Folder Path
