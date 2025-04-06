@@ -1,6 +1,6 @@
 # Configuration Variables
 # Script version for update checking
-$scriptVersion = "1.1.0"
+$scriptVersion = "1.2.0"
 
 # Steam App ID for "Schedule I"
 $appId = "3164500"
@@ -54,6 +54,73 @@ function Get-GameInstallPath {
             }
         }
     }
+    return $null
+}
+
+# Function to search for game on all drives
+function Find-GameOnAllDrives {
+    param ([string]$gameExeName)
+    
+    Write-Host "Searching for $gameExeName on all available drives. This may take a moment..." -ForegroundColor Yellow
+    
+    # Get all available drives
+    $drives = Get-PSDrive -PSProvider FileSystem | Where-Object { $_.Free -gt 0 }
+    
+    # Common game installation paths to check on each drive
+    $commonPaths = @(
+        "\Games",
+        "\Program Files\Steam\steamapps\common",
+        "\Program Files (x86)\Steam\steamapps\common",
+        "\SteamLibrary\steamapps\common",
+        "\Steam\steamapps\common",
+        "\Epic Games",
+        "\GOG Games"
+    )
+    
+    foreach ($drive in $drives) {
+        Write-Host "Checking drive $($drive.Root)..." -ForegroundColor Cyan
+        
+        # First check root directories with "Schedule" in the name
+        $rootDirs = Get-ChildItem -Path $drive.Root -Directory -ErrorAction SilentlyContinue |
+                    Where-Object { $_.Name -like "*Schedule*" }
+        
+        foreach ($dir in $rootDirs) {
+            # Recursively search for the game executable (limiting depth to prevent excessive searching)
+            $gamePaths = Get-ChildItem -Path $dir.FullName -Filter $gameExeName -Recurse -Depth 3 -ErrorAction SilentlyContinue
+            if ($gamePaths) {
+                $gamePath = $gamePaths[0].DirectoryName
+                Write-Host "Found game at: $gamePath" -ForegroundColor Green
+                return $gamePath
+            }
+        }
+        
+        # Next, check common installation paths
+        foreach ($path in $commonPaths) {
+            $fullPath = $drive.Root + $path.TrimStart('\')
+            if (Test-Path $fullPath) {
+                # Look for Schedule I specific folders
+                $scheduleFolders = Get-ChildItem -Path $fullPath -Directory -ErrorAction SilentlyContinue |
+                                  Where-Object { $_.Name -like "*Schedule*" }
+                
+                foreach ($folder in $scheduleFolders) {
+                    if (Test-Path (Join-Path $folder.FullName $gameExeName)) {
+                        Write-Host "Found game at: $($folder.FullName)" -ForegroundColor Green
+                        return $folder.FullName
+                    }
+                }
+                
+                # Direct search for the executable (in case the folder name doesn't contain "Schedule")
+                $gamePaths = Get-ChildItem -Path $fullPath -Filter $gameExeName -Recurse -Depth 2 -ErrorAction SilentlyContinue
+                if ($gamePaths) {
+                    $gamePath = $gamePaths[0].DirectoryName
+                    Write-Host "Found game at: $gamePath" -ForegroundColor Green
+                    return $gamePath
+                }
+            }
+        }
+    }
+    
+    Write-Host "Game not found on any drive." -ForegroundColor Yellow
     return $null
 }
 
@@ -348,9 +415,16 @@ $scheduleFolder = Get-GameInstallPath -libraryFolders $libraryFolders -appId $ap
 if ($scheduleFolder) {
     Write-Host "Success: Schedule I is installed at: $scheduleFolder"
 } else {
-    Write-Host "Schedule I installation not found automatically." -ForegroundColor Yellow
-    Write-Host "Would you like to manually select the installation folder? (Y/N)" -ForegroundColor Cyan
-    $response = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+    Write-Host "Schedule I installation not found in Steam library folders." -ForegroundColor Yellow
+    Write-Host "Searching other locations..." -ForegroundColor Cyan
+    
+    # Try to find the game on all drives
+    $scheduleFolder = Find-GameOnAllDrives -gameExeName $gameExeName
+    
+    if (-not $scheduleFolder) {
+        Write-Host "Schedule I installation not found automatically." -ForegroundColor Yellow
+        Write-Host "Would you like to manually select the installation folder? (Y/N)" -ForegroundColor Cyan
+        $response = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
     
     if ($response.Character -eq 'Y' -or $response.Character -eq 'y') {
         Write-Host "Opening folder selection dialog..." -ForegroundColor Cyan
@@ -395,6 +469,9 @@ if ($scheduleFolder) {
         $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
         exit
     }
+    }
+} else {
+    Write-Host "Success: Schedule I is installed at: $scheduleFolder" -ForegroundColor Green
 }
 
 # Step 3: Define Mods Folder Path
