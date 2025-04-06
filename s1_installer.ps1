@@ -463,7 +463,11 @@ Create-Shortcut -targetPath $scriptPath
 # Show execution summary
 Write-Host "\n========== Summary ==========" -ForegroundColor Cyan
 Write-Host "Script version: $scriptVersion" -ForegroundColor Cyan
-Write-Host "Status: Installation $($installSuccess ? 'Successful' : 'Completed with errors')" -ForegroundColor $($installSuccess ? 'Green' : 'Yellow')
+if ($installSuccess) {
+    Write-Host "Status: Installation Successful" -ForegroundColor Green
+} else {
+    Write-Host "Status: Installation Completed with errors" -ForegroundColor Yellow
+}
 Write-Host "Game Location: $scheduleFolder" -ForegroundColor Cyan
 Write-Host "Execution completed at: $(Get-Date)" -ForegroundColor Cyan
 Write-Host "============================" -ForegroundColor Cyan
