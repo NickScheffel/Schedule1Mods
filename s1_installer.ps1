@@ -154,48 +154,13 @@ function Install-Mods {
         $repoModsFolder = Join-Path $tempDir "mods"
         $sourceFolder = if (Test-Path $repoModsFolder) { $repoModsFolder } else { $tempDir }
         
-        # Create a backup of user's custom mods
-        $customModsDir = New-Item -ItemType Directory -Path ([System.IO.Path]::GetTempPath()) -Name ("custom_mods_" + [guid]::NewGuid())
-        $repoModsList = @()
-        
-        # Get list of files from the repository
-        Get-ChildItem -Path $sourceFolder -Recurse -File | ForEach-Object {
-            $relativePath = $_.FullName.Substring($sourceFolder.Length + 1)
-            $repoModsList += $relativePath
-        }
-        
-        # Back up custom mods (files not present in repo)
-        Get-ChildItem -Path $modsFolder -Recurse -File | ForEach-Object {
-            $relativePath = $_.FullName.Substring($modsFolder.Length + 1)
-            if ($repoModsList -notcontains $relativePath) {
-                # This is a custom mod - back it up
-                $destPath = Join-Path $customModsDir $relativePath
-                $destDir = Split-Path -Parent $destPath
-                if (-not (Test-Path $destDir)) {
-                    New-Item -ItemType Directory -Path $destDir -Force | Out-Null
-                }
-                Copy-Item -Path $_.FullName -Destination $destPath -Force
-                Write-Host "Info: Preserved custom mod: $relativePath"
-            }
-        }
+        # Clear the existing Mods folder before copying
+        Write-Host "Clearing existing Mods folder: $modsFolder" -ForegroundColor Yellow
+        Get-ChildItem -Path $modsFolder -Recurse | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
         
         # Copy files from repository into the mods folder (excluding .git)
         Copy-Item -Path "$sourceFolder\*" -Destination $modsFolder -Recurse -Force -Exclude ".git"
         Write-Host "Success: Repository files synchronized into $modsFolder"
-        
-        # Restore custom mods
-        if (Test-Path $customModsDir) {
-            Get-ChildItem -Path $customModsDir -Recurse -File | ForEach-Object {
-                $relativePath = $_.FullName.Substring($customModsDir.Length + 1)
-                $destPath = Join-Path $modsFolder $relativePath
-                $destDir = Split-Path -Parent $destPath
-                if (-not (Test-Path $destDir)) {
-                    New-Item -ItemType Directory -Path $destDir -Force | Out-Null
-                }
-                Copy-Item -Path $_.FullName -Destination $destPath -Force
-            }
-            Write-Host "Success: Restored custom mods"
-        }
     } catch {
         Write-Host "Error: Failed to clone and synchronize repository. $_" -ForegroundColor Red
         Write-Host "Note: Ensure Git is installed and you have internet access."
@@ -203,7 +168,6 @@ function Install-Mods {
     } finally {
         # Clean up temporary directories
         Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
-        Remove-Item -Path $customModsDir -Recurse -Force -ErrorAction SilentlyContinue
     }
     return $true
 }
